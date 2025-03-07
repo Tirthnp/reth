@@ -1,51 +1,62 @@
 [package]
 name = "reth-discv4"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
-description = """
-Ethereum network discovery
-"""
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Ethereum network discovery"
+
+[lints]
+workspace = true
 
 [dependencies]
 # reth
-reth-primitives = { path = "../../primitives" }
-reth-rlp = { path = "../../rlp", features = ["enr"] }
-reth-rlp-derive = { path = "../../rlp/rlp-derive" }
-reth-net-common = { path = "../common" }
-reth-net-nat = { path = "../nat" }
+reth-net-banlist.workspace = true
+reth-ethereum-forks.workspace = true
+reth-net-nat.workspace = true
+reth-network-peers = { workspace = true, features = ["secp256k1"] }
 
 # ethereum
-discv5 = { git = "https://github.com/sigp/discv5" }
-secp256k1 = { version = "0.24", features = [
-    "global-context",
-    "rand-std",
-    "recovery",
-] }
-enr = { version = "0.7.0", default-features = false, features = [
-    "rust-secp256k1",
-] }
+alloy-primitives = { workspace = true, features = ["rand"] }
+alloy-rlp = { workspace = true, features = ["derive"] }
+discv5.workspace = true
+secp256k1 = { workspace = true, features = ["global-context", "std", "recovery", "serde"] }
+enr.workspace = true
 
 # async/futures
-tokio = { version = "1", features = ["io-util", "net", "time"] }
-tokio-stream = "0.1"
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
+tokio-stream.workspace = true
 
 # misc
-tracing = "0.1"
-thiserror = "1.0"
-hex = "0.4"
-rand = { version = "0.8", optional = true }
-generic-array = "0.14"
-serde = { version = "1.0", optional = true }
+schnellru.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+rand = { workspace = true, optional = true }
+generic-array.workspace = true
+serde = { workspace = true, optional = true }
+itertools.workspace = true
 
 [dev-dependencies]
-rand = "0.8"
-tokio = { version = "1", features = ["macros"] }
-reth-tracing = { path = "../../tracing" }
+secp256k1 = { workspace = true, features = ["rand"] }
+assert_matches.workspace = true
+rand.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+reth-tracing.workspace = true
 
 [features]
 default = ["serde"]
+serde = [
+    "dep:serde",
+    "alloy-primitives/serde",
+    "discv5/serde",
+    "enr/serde",
+    "generic-array/serde",
+    "parking_lot/serde",
+    "rand?/serde",
+    "secp256k1/serde",
+    "reth-ethereum-forks/serde",
+]
 test-utils = ["dep:rand"]
-serde = ["dep:serde"]

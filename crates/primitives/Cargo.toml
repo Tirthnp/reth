@@ -1,96 +1,117 @@
 [package]
 name = "reth-primitives"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Commonly used types in reth."
+
+[lints]
+workspace = true
 
 [dependencies]
 # reth
-reth-rlp = { path = "../rlp", features = ["std", "derive", "ethereum-types"] }
-reth-rlp-derive = { path = "../rlp/rlp-derive" }
-reth-codecs = { version = "0.1.0", path = "../storage/codecs" }
-
-revm-primitives = { version = "1.0", features = ["serde"] }
+reth-ethereum-primitives.workspace = true
+reth-primitives-traits = { workspace = true, features = ["serde"] }
+reth-ethereum-forks.workspace = true
+reth-static-file-types.workspace = true
 
 # ethereum
-ethers-core = { git = "https://github.com/gakonst/ethers-rs", default-features = false }
-tiny-keccak = { version = "2.0", features = ["keccak"] }
-crunchy = { version = "0.2.2", default-features = false, features = ["limit_256"] }
+alloy-consensus.workspace = true
 
-# Bloom
-fixed-hash = { version = "0.8", default-features = false, features = [
-    "rustc-hex",
-] }
-
-# crypto
-secp256k1 = { version = "0.24.2", default-features = false, features = [
-    "global-context",
-    "alloc",
-    "recovery",
-] }
-
-# used for forkid
-crc = "3"
+# for eip-4844
+c-kzg = { workspace = true, features = ["serde"], optional = true }
 
 # misc
-bytes = "1.4"
-serde = "1.0"
-serde_json = "1.0"
-serde_with = "2.1.0"
-thiserror = "1"
-sucds = "0.5.0"
-hex = "0.4"
-hex-literal = "0.3"
-modular-bitfield = "0.11.2"
-derive_more = "0.99"
-url = "2.3"
-impl-serde = "0.4.0"
-once_cell = "1.17.0"
-
-# proof related
-triehash = "0.8"
-# See to replace hashers to simplify libraries
-plain_hasher = "0.2"
-hash-db = "0.15"
+once_cell.workspace = true
 
 # arbitrary utils
-arbitrary = { version = "1.1.7", features = ["derive"], optional = true }
-proptest = { version = "1.0", optional = true }
-proptest-derive = { version = "0.3", optional = true }
-strum = { version = "0.24", features = ["derive"] }
+arbitrary = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
-serde_json = "1.0"
-hex-literal = "0.3"
-test-fuzz = "3.0.4"
-rand = "0.8"
-revm-primitives = { version = "1.0", features = ["arbitrary"] }
-arbitrary = { version = "1.1.7", features = ["derive"] }
-proptest = { version = "1.0" }
-proptest-derive = "0.3"
+# eth
+reth-primitives-traits = { workspace = true, features = ["arbitrary", "test-utils"] }
 
-# necessary so we don't hit a "undeclared 'std'": 
-# https://github.com/paradigmxyz/reth/pull/177#discussion_r1021172198 
-secp256k1 = "0.24.2"
-criterion = "0.4.0"
-pprof = { version = "0.11", features = [
-    "flamegraph",
-    "frame-pointer",
-    "criterion",
-] }
+alloy-primitives.workspace = true
+alloy-rlp.workspace = true
+alloy-eips = { workspace = true, features = ["arbitrary"] }
+alloy-genesis.workspace = true
+
+arbitrary = { workspace = true, features = ["derive"] }
+
+proptest-arbitrary-interop.workspace = true
+proptest.workspace = true
+serde_json.workspace = true
+reth-codecs.workspace = true
+
+criterion.workspace = true
+pprof = { workspace = true, features = ["flamegraph", "frame-pointer", "criterion"] }
 
 [features]
-default = []
+default = ["c-kzg", "alloy-compat", "std", "reth-codec", "secp256k1"]
+std = [
+    "reth-primitives-traits/std",
+    "alloy-consensus/std",
+    "alloy-eips/std",
+    "alloy-genesis/std",
+    "once_cell/std",
+    "reth-ethereum-forks/std",
+    "serde_json/std",
+    "reth-ethereum-primitives/std",
+    "alloy-rlp/std",
+    "alloy-primitives/std",
+    "reth-static-file-types/std",
+]
+reth-codec = [
+    "std",
+    "reth-primitives-traits/reth-codec",
+    "reth-ethereum-primitives/reth-codec",
+]
+asm-keccak = [
+    "alloy-primitives/asm-keccak",
+]
 arbitrary = [
-    "revm-primitives/arbitrary",
     "dep:arbitrary",
-    "dep:proptest",
-    "dep:proptest-derive",
+    "alloy-eips/arbitrary",
+    "reth-codec",
+    "reth-ethereum-forks/arbitrary",
+    "reth-primitives-traits/arbitrary",
+    "alloy-consensus/arbitrary",
+    "reth-ethereum-primitives/arbitrary",
+    "reth-codecs/arbitrary",
+    "alloy-primitives/arbitrary",
+]
+secp256k1 = [
+    "reth-primitives-traits/secp256k1",
+]
+c-kzg = [
+    "dep:c-kzg",
+    "alloy-consensus/kzg",
+    "alloy-eips/kzg",
+]
+alloy-compat = [
+    "reth-ethereum-primitives/alloy-compat",
+]
+test-utils = [
+    "reth-primitives-traits/test-utils",
+    "arbitrary",
+    "reth-codecs/test-utils",
+    "reth-ethereum-primitives/test-utils",
+]
+serde-bincode-compat = [
+    "alloy-eips/serde-bincode-compat",
+    "alloy-consensus/serde-bincode-compat",
+    "reth-primitives-traits/serde-bincode-compat",
+    "reth-ethereum-primitives/serde-bincode-compat",
 ]
 
 [[bench]]
 name = "recover_ecdsa_crit"
+harness = false
+
+[[bench]]
+name = "validate_blob_tx"
+required-features = ["arbitrary", "c-kzg"]
 harness = false

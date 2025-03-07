@@ -1,125 +1,78 @@
-#![warn(missing_debug_implementations, missing_docs, unreachable_pub)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
-
-//! Commonly used types in reth.
+//! Commonly used types in Reth.
 //!
 //! This crate contains Ethereum primitive types and helper functions.
+//!
+//! ## Feature Flags
+//!
+//! - `alloy-compat`: Adds compatibility conversions for certain alloy types.
+//! - `arbitrary`: Adds `proptest` and `arbitrary` support for primitive types.
+//! - `test-utils`: Export utilities for testing
+//! - `reth-codec`: Enables db codec support for reth types including zstd compression for certain
+//!   types.
 
-mod account;
-mod bits;
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/paradigmxyz/reth/main/assets/reth-docs.png",
+    html_favicon_url = "https://avatars0.githubusercontent.com/u/97369466?s=256",
+    issue_tracker_base_url = "https://github.com/paradigmxyz/reth/issues/"
+)]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![cfg_attr(not(feature = "std"), no_std)]
+
 mod block;
-pub mod bloom;
-mod chain;
-pub mod constants;
-mod error;
-pub mod filter;
-mod forkid;
-mod genesis;
-mod hardfork;
-mod header;
-mod hex_bytes;
-mod integer_list;
-mod jsonu256;
-mod log;
-mod net;
-mod peer;
 mod receipt;
-mod storage;
-mod transaction;
-mod withdrawal;
+pub use reth_static_file_types as static_file;
+pub mod transaction;
+#[cfg(any(test, feature = "arbitrary"))]
+pub use block::{generate_valid_header, valid_header_strategy};
+pub use block::{Block, BlockBody, SealedBlock};
+#[allow(deprecated)]
+pub use block::{BlockWithSenders, SealedBlockFor, SealedBlockWithSenders};
 
-/// Helper function for calculating Merkle proofs and hashes
-pub mod proofs;
+pub use receipt::{gas_spent_by_transactions, Receipt};
+pub use reth_primitives_traits::{
+    logs_bloom, Account, BlockTy, BodyTy, Bytecode, GotExpected, GotExpectedBoxed, Header,
+    HeaderError, HeaderTy, Log, LogData, NodePrimitives, ReceiptTy, RecoveredBlock, SealedHeader,
+    StorageEntry, TxTy,
+};
+pub use static_file::StaticFileSegment;
 
-pub use account::Account;
-pub use bits::H512;
-pub use block::{Block, BlockHashOrNumber, BlockId, BlockNumberOrTag, SealedBlock};
-pub use bloom::Bloom;
-pub use chain::{
-    AllGenesisFormats, Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ForkCondition, GOERLI,
-    MAINNET, SEPOLIA,
+pub use alloy_consensus::{
+    transaction::{PooledTransaction, Recovered, TransactionMeta},
+    ReceiptWithBloom,
 };
-pub use constants::{
-    EMPTY_OMMER_ROOT, GOERLI_GENESIS, KECCAK_EMPTY, MAINNET_GENESIS, SEPOLIA_GENESIS,
-};
-pub use forkid::{ForkFilter, ForkHash, ForkId, ForkTransition, ValidationError};
-pub use genesis::{Genesis, GenesisAccount};
-pub use hardfork::Hardfork;
-pub use header::{Head, Header, HeadersDirection, SealedHeader};
-pub use hex_bytes::Bytes;
-pub use integer_list::IntegerList;
-pub use jsonu256::JsonU256;
-pub use log::Log;
-pub use net::NodeRecord;
-pub use peer::{PeerId, WithPeerId};
-pub use receipt::Receipt;
-pub use storage::{StorageEntry, StorageTrieEntry};
+
+/// Recovered transaction
+#[deprecated(note = "use `Recovered` instead")]
+pub type RecoveredTx<T> = Recovered<T>;
+
 pub use transaction::{
-    AccessList, AccessListItem, FromRecoveredTransaction, IntoRecoveredTransaction, Signature,
-    Transaction, TransactionKind, TransactionSigned, TransactionSignedEcRecovered, TxEip1559,
-    TxEip2930, TxLegacy, TxType,
+    util::secp256k1::{public_key_to_address, recover_signer_unchecked, sign_message},
+    InvalidTransactionError, Transaction, TransactionSigned, TxType,
 };
-pub use withdrawal::Withdrawal;
+#[allow(deprecated)]
+pub use transaction::{PooledTransactionsElementEcRecovered, TransactionSignedEcRecovered};
 
-/// A block hash.
-pub type BlockHash = H256;
-/// A block number.
-pub type BlockNumber = u64;
-/// An Ethereum address.
-pub type Address = H160;
-/// A transaction hash is a kecack hash of an RLP encoded signed transaction.
-pub type TxHash = H256;
-/// The sequence number of all existing transactions.
-pub type TxNumber = u64;
-/// Chain identifier type (introduced in EIP-155).
-pub type ChainId = u64;
-/// An account storage key.
-pub type StorageKey = H256;
-/// An account storage value.
-pub type StorageValue = U256;
-/// The ID of block/transaction transition (represents state transition)
-pub type TransitionId = u64;
+// Re-exports
+pub use reth_ethereum_forks::*;
 
-pub use ethers_core::{
-    types as rpc,
-    types::{BigEndianHash, H128, H64, U64},
-    utils as rpc_utils,
-};
-pub use revm_primitives::{ruint::aliases::U128, B160 as H160, B256 as H256, U256};
+#[cfg(any(test, feature = "arbitrary"))]
+pub use arbitrary;
 
-#[doc(hidden)]
-mod __reexport {
-    pub use bytes;
-    pub use hex;
-    pub use hex_literal;
-    pub use tiny_keccak;
+#[cfg(feature = "c-kzg")]
+pub use c_kzg as kzg;
+
+/// Bincode-compatible serde implementations for commonly used types in Reth.
+///
+/// `bincode` crate doesn't work with optionally serializable serde fields, but some of the
+/// Reth types require optional serialization for RPC compatibility. This module makes so that
+/// all fields are serialized.
+///
+/// Read more: <https://github.com/bincode-org/bincode/issues/326>
+#[cfg(feature = "serde-bincode-compat")]
+pub mod serde_bincode_compat {
+    pub use reth_primitives_traits::serde_bincode_compat::*;
 }
 
-// Useful reexports
-pub use __reexport::*;
-
-/// Various utilities
-pub mod utils {
-    pub use ethers_core::types::serde_helpers;
-}
-
-/// Helpers for working with serde
-pub mod serde_helper {
-    pub use crate::jsonu256::deserialize_json_u256;
-}
-
-/// Returns the keccak256 hash for the given data.
-#[inline]
-pub fn keccak256(data: impl AsRef<[u8]>) -> H256 {
-    use tiny_keccak::{Hasher, Keccak};
-
-    let mut buf = [0u8; 32];
-    let mut hasher = Keccak::v256();
-    hasher.update(data.as_ref());
-    hasher.finalize(&mut buf);
-    buf.into()
-}
+// Re-export of `EthPrimitives`
+pub use reth_ethereum_primitives::EthPrimitives;

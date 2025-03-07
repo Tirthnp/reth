@@ -1,28 +1,21 @@
 //! Collection of common provider traits.
 
-mod account;
-pub use account::AccountProvider;
+// Re-export all the traits
+pub use reth_storage_api::*;
 
 mod block;
-pub use block::BlockProvider;
+pub use block::*;
 
-mod block_hash;
-pub use block_hash::BlockHashProvider;
-
-mod block_id;
-pub use block_id::BlockIdProvider;
-
-mod evm_env;
-pub use evm_env::EvmEnvProvider;
-
-mod header;
-pub use header::HeaderProvider;
+mod header_sync_gap;
+pub use header_sync_gap::{HeaderSyncGap, HeaderSyncGapProvider};
 
 mod state;
-pub use state::{StateProvider, StateProviderFactory};
+pub use state::StateWriter;
 
-mod transactions;
-pub use transactions::TransactionsProvider;
+pub use reth_chainspec::ChainSpecProvider;
 
-mod withdrawals;
-pub use withdrawals::WithdrawalsProvider;
+mod static_file_provider;
+pub use static_file_provider::StaticFileProviderFactory;
+
+mod full;
+pub use full::{FullProvider, FullRpcProvider};

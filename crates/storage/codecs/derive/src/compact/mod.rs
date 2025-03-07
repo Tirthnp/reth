@@ -1,8 +1,7 @@
-extern crate proc_macro2;
-use proc_macro::{self, TokenStream};
+use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput};
+use syn::{Data, DeriveInput, Generics};
 
 mod generator;
 use generator::*;
@@ -16,20 +15,25 @@ use flags::*;
 mod structs;
 use structs::*;
 
-// Helper Alias type
-type IsCompact = bool;
-// Helper Alias type
-type FieldName = String;
+use crate::ZstdConfig;
+
 // Helper Alias type
 type FieldType = String;
 /// `Compact` has alternative functions that can be used as a workaround for type
 /// specialization of fixed sized types.
 ///
-/// Example: `Vec<H256>` vs `Vec<U256>`. The first does not
+/// Example: `Vec<B256>` vs `Vec<U256>`. The first does not
 /// require the len of the element, while the latter one does.
 type UseAlternative = bool;
 // Helper Alias type
-type StructFieldDescriptor = (FieldName, FieldType, IsCompact, UseAlternative);
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct StructFieldDescriptor {
+    name: String,
+    ftype: String,
+    is_compact: bool,
+    use_alt_impl: bool,
+    is_reference: bool,
+}
 // Helper Alias type
 type FieldList = Vec<FieldTypes>;
 
@@ -41,14 +45,21 @@ pub enum FieldTypes {
 }
 
 /// Derives the `Compact` trait and its from/to implementations.
-pub fn derive(input: TokenStream) -> TokenStream {
+pub fn derive(input: DeriveInput, zstd: Option<ZstdConfig>) -> TokenStream {
     let mut output = quote! {};
 
-    let DeriveInput { ident, data, .. } = parse_macro_input!(input);
+    let DeriveInput { ident, data, generics, attrs, .. } = input;
+
+    let has_lifetime = has_lifetime(&generics);
+
     let fields = get_fields(&data);
-    output.extend(generate_flag_struct(&ident, &fields));
-    output.extend(generate_from_to(&ident, &fields));
+    output.extend(generate_flag_struct(&ident, &attrs, has_lifetime, &fields, zstd.is_some()));
+    output.extend(generate_from_to(&ident, &attrs, has_lifetime, &fields, zstd));
     output.into()
+}
+
+pub fn has_lifetime(generics: &Generics) -> bool {
+    generics.lifetimes().next().is_some()
 }
 
 /// Given a list of fields on a struct, extract their fields and types.
@@ -61,11 +72,12 @@ pub fn get_fields(data: &Data) -> FieldList {
                 for field in &data_fields.named {
                     load_field(field, &mut fields, false);
                 }
-                assert_eq!(fields.len(), data_fields.named.len());
+                assert_eq!(fields.len(), data_fields.named.len(), "get_fields");
             }
             syn::Fields::Unnamed(ref data_fields) => {
-                assert!(
-                    data_fields.unnamed.len() == 1,
+                assert_eq!(
+                    data_fields.unnamed.len(),
+                    1,
                     "Compact only allows one unnamed field. Consider making it a struct."
                 );
                 load_field(&data_fields.unnamed[0], &mut fields, false);
@@ -81,8 +93,9 @@ pub fn get_fields(data: &Data) -> FieldList {
                         panic!("Not allowed to have Enum Variants with multiple named fields. Make it a struct instead.")
                     }
                     syn::Fields::Unnamed(data_fields) => {
-                        assert!(
-                            data_fields.unnamed.len() == 1,
+                        assert_eq!(
+                            data_fields.unnamed.len(),
+                            1,
                             "Compact only allows one unnamed field. Consider making it a struct."
                         );
                         load_field(&data_fields.unnamed[0], &mut fields, true);
@@ -98,54 +111,80 @@ pub fn get_fields(data: &Data) -> FieldList {
 }
 
 fn load_field(field: &syn::Field, fields: &mut FieldList, is_enum: bool) {
-    if let syn::Type::Path(ref path) = field.ty {
-        let segments = &path.path.segments;
-        if !segments.is_empty() {
-            let mut ftype = String::new();
+    match field.ty {
+        syn::Type::Reference(ref reference) => match &*reference.elem {
+            syn::Type::Path(path) => {
+                load_field_from_segments(&path.path.segments, is_enum, fields, field)
+            }
+            _ => unimplemented!("{:?}", &field.ident),
+        },
+        syn::Type::Path(ref path) => {
+            load_field_from_segments(&path.path.segments, is_enum, fields, field)
+        }
+        _ => unimplemented!("{:?}", &field.ident),
+    }
+}
 
-            let mut use_alt_impl: UseAlternative = false;
+fn load_field_from_segments(
+    segments: &syn::punctuated::Punctuated<syn::PathSegment, syn::token::PathSep>,
+    is_enum: bool,
+    fields: &mut Vec<FieldTypes>,
+    field: &syn::Field,
+) {
+    if !segments.is_empty() {
+        let mut ftype = String::new();
 
-            for (index, segment) in segments.iter().enumerate() {
-                ftype.push_str(&segment.ident.to_string());
-                if index < segments.len() - 1 {
-                    ftype.push_str("::");
-                }
+        let mut use_alt_impl: UseAlternative = false;
 
-                use_alt_impl = should_use_alt_impl(&ftype, segment);
+        for (index, segment) in segments.iter().enumerate() {
+            ftype.push_str(&segment.ident.to_string());
+            if index < segments.len() - 1 {
+                ftype.push_str("::");
             }
 
-            if is_enum {
-                fields.push(FieldTypes::EnumUnnamedField((ftype.to_string(), use_alt_impl)));
-            } else {
-                let should_compact = is_flag_type(&ftype) ||
-                    field.attrs.iter().any(|attr| {
-                        attr.path.segments.iter().any(|path| path.ident == "maybe_zero")
-                    });
+            use_alt_impl = should_use_alt_impl(&ftype, segment);
+        }
 
-                fields.push(FieldTypes::StructField((
-                    field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default(),
-                    ftype,
-                    should_compact,
-                    use_alt_impl,
-                )));
-            }
+        if is_enum {
+            fields.push(FieldTypes::EnumUnnamedField((ftype, use_alt_impl)));
+        } else {
+            let should_compact = is_flag_type(&ftype) ||
+                field.attrs.iter().any(|attr| {
+                    attr.path().segments.iter().any(|path| path.ident == "maybe_zero")
+                });
+
+            fields.push(FieldTypes::StructField(StructFieldDescriptor {
+                name: field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default(),
+                ftype,
+                is_compact: should_compact,
+                use_alt_impl,
+                is_reference: matches!(field.ty, syn::Type::Reference(_)),
+            }));
         }
     }
 }
 
 /// Since there's no impl specialization in rust stable atm, once we find we have a
-/// Vec/Option we try to find out if it's a Vec/Option of a fixed size data type, e.g. `Vec<H256>`.
+/// Vec/Option we try to find out if it's a Vec/Option of a fixed size data type, e.g. `Vec<B256>`.
 ///
 /// If so, we use another impl to code/decode its data.
-fn should_use_alt_impl(ftype: &String, segment: &syn::PathSegment) -> bool {
-    if *ftype == "Vec" || *ftype == "Option" {
+fn should_use_alt_impl(ftype: &str, segment: &syn::PathSegment) -> bool {
+    if ftype == "Vec" || ftype == "Option" {
         if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
             if let Some(syn::GenericArgument::Type(syn::Type::Path(arg_path))) = args.args.last() {
                 if let (Some(path), 1) =
                     (arg_path.path.segments.first(), arg_path.path.segments.len())
                 {
-                    if ["H256", "H160", "Address", "Bloom"]
-                        .contains(&path.ident.to_string().as_str())
+                    if [
+                        "B256",
+                        "Address",
+                        "Address",
+                        "Bloom",
+                        "TxHash",
+                        "BlockHash",
+                        "CompactPlaceholder",
+                    ]
+                    .contains(&path.ident.to_string().as_str())
                     {
                         return true
                     }
@@ -160,17 +199,17 @@ fn should_use_alt_impl(ftype: &String, segment: &syn::PathSegment) -> bool {
 /// length.
 pub fn get_bit_size(ftype: &str) -> u8 {
     match ftype {
-        "bool" | "Option" => 1,
-        "TxType" => 2,
-        "u64" | "BlockNumber" | "TxNumber" | "ChainId" => 4,
+        "TransactionKind" | "TxKind" | "bool" | "Option" | "Signature" => 1,
+        "TxType" | "OpTxType" => 2,
+        "u64" | "BlockNumber" | "TxNumber" | "ChainId" | "NumTransactions" => 4,
         "u128" => 5,
-        "U256" | "TxHash" => 6,
+        "U256" => 6,
         _ => 0,
     }
 }
 
 /// Given the field type in a string format, checks if its type should be added to the
-/// StructFlags.
+/// `StructFlags`.
 pub fn is_flag_type(ftype: &str) -> bool {
     get_bit_size(ftype) > 0
 }
@@ -178,40 +217,54 @@ pub fn is_flag_type(ftype: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use similar_asserts::assert_eq;
     use syn::parse2;
 
     #[test]
     fn gen() {
         let f_struct = quote! {
-            #[derive(Debug, PartialEq, Clone)]
-            pub struct TestStruct {
-                f_u64: u64,
-                f_u256: U256,
-                f_bool_t: bool,
-                f_bool_f: bool,
-                f_option_none: Option<U256>,
-                f_option_some: Option<H256>,
-                f_option_some_u64: Option<u64>,
-                f_vec_empty: Vec<U256>,
-                f_vec_some: Vec<H160>,
-            }
+             #[derive(Debug, PartialEq, Clone)]
+             pub struct TestStruct {
+                 f_u64: u64,
+                 f_u256: U256,
+                 f_bool_t: bool,
+                 f_bool_f: bool,
+                 f_option_none: Option<U256>,
+                 f_option_some: Option<B256>,
+                 f_option_some_u64: Option<u64>,
+                 f_vec_empty: Vec<U256>,
+                 f_vec_some: Vec<Address>,
+             }
         };
 
         // Generate code that will impl the `Compact` trait.
         let mut output = quote! {};
-        let DeriveInput { ident, data, .. } = parse2(f_struct).unwrap();
+        let DeriveInput { ident, data, attrs, .. } = parse2(f_struct).unwrap();
         let fields = get_fields(&data);
-        output.extend(generate_flag_struct(&ident, &fields));
-        output.extend(generate_from_to(&ident, &fields));
+        output.extend(generate_flag_struct(&ident, &attrs, false, &fields, false));
+        output.extend(generate_from_to(&ident, &attrs, false, &fields, None));
 
         // Expected output in a TokenStream format. Commas matter!
         let should_output = quote! {
-            pub use TestStruct_flags::TestStructFlags;
-            mod TestStruct_flags {
-                use bytes::Buf;
-                use modular_bitfield::prelude::*;
+            impl TestStruct {
+                #[doc = "Used bytes by [`TestStructFlags`]"]
+                pub const fn bitflag_encoded_bytes() -> usize {
+                    2u8 as usize
+                }
+                #[doc = "Unused bits for new fields by [`TestStructFlags`]"]
+                pub const fn bitflag_unused_bits() -> usize {
+                    1u8 as usize
+                }
+            }
 
-                #[doc=r" Fieldset that facilitates compacting the parent type."]
+            pub use TestStruct_flags::TestStructFlags;
+
+            #[allow(non_snake_case)]
+            mod TestStruct_flags {
+                use reth_codecs::__private::Buf;
+                use reth_codecs::__private::modular_bitfield;
+                use reth_codecs::__private::modular_bitfield::prelude::*;
+                #[doc = "Fieldset that facilitates compacting the parent type. Used bytes: 2 | Unused bits: 1"]
                 #[bitfield]
                 #[derive(Clone, Copy, Debug, Default)]
                 pub struct TestStructFlags {
@@ -226,7 +279,7 @@ mod tests {
                     unused: B1,
                 }
                 impl TestStructFlags {
-                    #[doc=r" Deserializes this fieldset and returns it, alongside the original slice in an advanced position."]
+                    #[doc = r" Deserializes this fieldset and returns it, alongside the original slice in an advanced position."]
                     pub fn from(mut buf: &[u8]) -> (Self, &[u8]) {
                         (
                             TestStructFlags::from_bytes([buf.get_u8(), buf.get_u8(),]),
@@ -239,20 +292,22 @@ mod tests {
             #[allow(dead_code)]
             #[test_fuzz::test_fuzz]
             fn fuzz_test_test_struct(obj: TestStruct) {
+                use reth_codecs::Compact;
                 let mut buf = vec![];
                 let len = obj.clone().to_compact(&mut buf);
                 let (same_obj, buf) = TestStruct::from_compact(buf.as_ref(), len);
                 assert_eq!(obj, same_obj);
             }
             #[test]
+            #[allow(missing_docs)]
             pub fn fuzz_test_struct() {
                 fuzz_test_test_struct(TestStruct::default())
             }
-            impl Compact for TestStruct {
-                fn to_compact(self, buf: &mut impl bytes::BufMut) -> usize {
+            impl reth_codecs::Compact for TestStruct {
+                fn to_compact<B>(&self, buf: &mut B) -> usize where B: reth_codecs::__private::bytes::BufMut + AsMut<[u8]> {
                     let mut flags = TestStructFlags::default();
-                    let mut total_len = 0;
-                    let mut buffer = bytes::BytesMut::new();
+                    let mut total_length = 0;
+                    let mut buffer = reth_codecs::__private::bytes::BytesMut::new();
                     let f_u64_len = self.f_u64.to_compact(&mut buffer);
                     flags.set_f_u64_len(f_u64_len as u8);
                     let f_u256_len = self.f_u256.to_compact(&mut buffer);
@@ -270,32 +325,31 @@ mod tests {
                     let f_vec_empty_len = self.f_vec_empty.to_compact(&mut buffer);
                     let f_vec_some_len = self.f_vec_some.specialized_to_compact(&mut buffer);
                     let flags = flags.into_bytes();
-                    total_len += flags.len() + buffer.len();
+                    total_length += flags.len() + buffer.len();
                     buf.put_slice(&flags);
                     buf.put(buffer);
-                    total_len
+                    total_length
                 }
                 fn from_compact(mut buf: &[u8], len: usize) -> (Self, &[u8]) {
                     let (flags, mut buf) = TestStructFlags::from(buf);
-                    let mut f_u64 = u64::default();
-                    (f_u64, buf) = u64::from_compact(buf, flags.f_u64_len() as usize);
-                    let mut f_u256 = U256::default();
-                    (f_u256, buf) = U256::from_compact(buf, flags.f_u256_len() as usize);
-                    let mut f_bool_t = bool::default();
-                    (f_bool_t, buf) = bool::from_compact(buf, flags.f_bool_t_len() as usize);
-                    let mut f_bool_f = bool::default();
-                    (f_bool_f, buf) = bool::from_compact(buf, flags.f_bool_f_len() as usize);
-                    let mut f_option_none = Option::default();
-                    (f_option_none, buf) = Option::from_compact(buf, flags.f_option_none_len() as usize);
-                    let mut f_option_some = Option::default();
-                    (f_option_some, buf) = Option::specialized_from_compact(buf, flags.f_option_some_len() as usize);
-                    let mut f_option_some_u64 = Option::default();
-                    (f_option_some_u64, buf) =
-                        Option::from_compact(buf, flags.f_option_some_u64_len() as usize);
-                    let mut f_vec_empty = Vec::default();
-                    (f_vec_empty, buf) = Vec::from_compact(buf, buf.len());
-                    let mut f_vec_some = Vec::default();
-                    (f_vec_some, buf) = Vec::specialized_from_compact(buf, buf.len());
+                    let (f_u64, new_buf) = u64::from_compact(buf, flags.f_u64_len() as usize);
+                    buf = new_buf;
+                    let (f_u256, new_buf) = U256::from_compact(buf, flags.f_u256_len() as usize);
+                    buf = new_buf;
+                    let (f_bool_t, new_buf) = bool::from_compact(buf, flags.f_bool_t_len() as usize);
+                    buf = new_buf;
+                    let (f_bool_f, new_buf) = bool::from_compact(buf, flags.f_bool_f_len() as usize);
+                    buf = new_buf;
+                    let (f_option_none, new_buf) = Option::from_compact(buf, flags.f_option_none_len() as usize);
+                    buf = new_buf;
+                    let (f_option_some, new_buf) = Option::specialized_from_compact(buf, flags.f_option_some_len() as usize);
+                    buf = new_buf;
+                    let (f_option_some_u64, new_buf) = Option::from_compact(buf, flags.f_option_some_u64_len() as usize);
+                    buf = new_buf;
+                    let (f_vec_empty, new_buf) = Vec::from_compact(buf, buf.len());
+                    buf = new_buf;
+                    let (f_vec_some, new_buf) = Vec::specialized_from_compact(buf, buf.len());
+                    buf = new_buf;
                     let obj = TestStruct {
                         f_u64: f_u64,
                         f_u256: f_u256,
@@ -312,6 +366,9 @@ mod tests {
             }
         };
 
-        assert_eq!(output.to_string(), should_output.to_string());
+        assert_eq!(
+            syn::parse2::<syn::File>(output).unwrap(),
+            syn::parse2::<syn::File>(should_output).unwrap()
+        );
     }
 }

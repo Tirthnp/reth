@@ -1,9 +1,9 @@
-use crate::result::ToRpcResult;
+use alloy_primitives::{keccak256, Bytes, B256};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use reth_network_api::NetworkInfo;
-use reth_primitives::{keccak256, Bytes, H256};
 use reth_rpc_api::Web3ApiServer;
+use reth_rpc_server_types::ToRpcResult;
 
 /// `web3` API implementation.
 ///
@@ -15,8 +15,8 @@ pub struct Web3Api<N> {
 
 impl<N> Web3Api<N> {
     /// Creates a new instance of `Web3Api`.
-    pub fn new(network: N) -> Self {
-        Web3Api { network }
+    pub const fn new(network: N) -> Self {
+        Self { network }
     }
 }
 
@@ -25,12 +25,14 @@ impl<N> Web3ApiServer for Web3Api<N>
 where
     N: NetworkInfo + 'static,
 {
+    /// Handler for `web3_clientVersion`
     async fn client_version(&self) -> RpcResult<String> {
         let status = self.network.network_status().await.to_rpc_result()?;
         Ok(status.client_version)
     }
 
-    fn sha3(&self, input: Bytes) -> RpcResult<H256> {
+    /// Handler for `web3_sha3`
+    fn sha3(&self, input: Bytes) -> RpcResult<B256> {
         Ok(keccak256(input))
     }
 }

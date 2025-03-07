@@ -1,23 +1,38 @@
 [package]
 name = "reth-tasks"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "Task management"
 
+[lints]
+workspace = true
+
 [dependencies]
+# async
+tokio = { workspace = true, features = ["sync", "rt"] }
+tracing-futures.workspace = true
+futures-util = { workspace = true, features = ["std"] }
 
-## async
-tokio = { version = "1", features = ["sync", "rt"] }
-tracing-futures = "0.2"
-futures-util = "0.3"
+# metrics
+reth-metrics.workspace = true
+metrics.workspace = true
 
-## misc
-tracing = { version = "0.1", default-features = false }
-thiserror = "1.0"
-dyn-clone = "1.0"
+# misc
+auto_impl.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+dyn-clone.workspace = true
+
+# feature `rayon`
+rayon = { workspace = true, optional = true }
+pin-project = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+
+[features]
+rayon = ["dep:rayon", "pin-project"]

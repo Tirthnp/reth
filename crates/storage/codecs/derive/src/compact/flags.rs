@@ -1,12 +1,21 @@
 use super::*;
+use syn::Attribute;
 
 /// Generates the flag fieldset struct that is going to be used to store the length of fields and
 /// their potential presence.
-pub(crate) fn generate_flag_struct(ident: &Ident, fields: &FieldList) -> TokenStream2 {
+pub(crate) fn generate_flag_struct(
+    ident: &Ident,
+    attrs: &[Attribute],
+    has_lifetime: bool,
+    fields: &FieldList,
+    is_zstd: bool,
+) -> TokenStream2 {
     let is_enum = fields.iter().any(|field| matches!(field, FieldTypes::EnumVariant(_)));
 
     let flags_ident = format_ident!("{ident}Flags");
     let mod_flags_ident = format_ident!("{ident}_flags");
+
+    let reth_codecs = parse_reth_codecs_path(attrs).unwrap();
 
     let mut field_flags = vec![];
 
@@ -27,14 +36,15 @@ pub(crate) fn generate_flag_struct(ident: &Ident, fields: &FieldList) -> TokenSt
                 })
                 .collect::<Vec<_>>(),
             &mut field_flags,
+            is_zstd,
         )
     };
 
     if total_bits == 0 {
-        return placeholder_flag_struct(&flags_ident)
+        return placeholder_flag_struct(ident, &flags_ident)
     }
 
-    let total_bytes = pad_flag_struct(total_bits, &mut field_flags);
+    let (total_bytes, unused_bits) = pad_flag_struct(total_bits, &mut field_flags);
 
     // Provides the number of bytes used to represent the flag struct.
     let readable_bytes = vec![
@@ -44,15 +54,49 @@ pub(crate) fn generate_flag_struct(ident: &Ident, fields: &FieldList) -> TokenSt
         total_bytes.into()
     ];
 
+    let docs =
+        format!("Fieldset that facilitates compacting the parent type. Used bytes: {total_bytes} | Unused bits: {unused_bits}");
+    let bitflag_encoded_bytes = format!("Used bytes by [`{flags_ident}`]");
+    let bitflag_unused_bits = format!("Unused bits for new fields by [`{flags_ident}`]");
+    let impl_bitflag_encoded_bytes = if has_lifetime {
+        quote! {
+            impl<'a> #ident<'a> {
+                #[doc = #bitflag_encoded_bytes]
+                pub const fn bitflag_encoded_bytes() -> usize {
+                    #total_bytes as usize
+                }
+                #[doc = #bitflag_unused_bits]
+                pub const fn bitflag_unused_bits() -> usize {
+                    #unused_bits as usize
+                }
+           }
+        }
+    } else {
+        quote! {
+            impl #ident {
+                #[doc = #bitflag_encoded_bytes]
+                pub const fn bitflag_encoded_bytes() -> usize {
+                    #total_bytes as usize
+                }
+                #[doc = #bitflag_unused_bits]
+                pub const fn bitflag_unused_bits() -> usize {
+                    #unused_bits as usize
+                }
+           }
+        }
+    };
+
     // Generate the flag struct.
     quote! {
-
+        #impl_bitflag_encoded_bytes
         pub use #mod_flags_ident::#flags_ident;
+        #[allow(non_snake_case)]
         mod #mod_flags_ident {
-            use bytes::Buf;
-            use modular_bitfield::prelude::*;
+            use #reth_codecs::__private::Buf;
+            use #reth_codecs::__private::modular_bitfield;
+            use #reth_codecs::__private::modular_bitfield::prelude::*;
 
-            /// Fieldset that facilitates compacting the parent type.
+            #[doc = #docs]
             #[bitfield]
             #[derive(Clone, Copy, Debug, Default)]
             pub struct #flags_ident {
@@ -77,11 +121,14 @@ pub(crate) fn generate_flag_struct(ident: &Ident, fields: &FieldList) -> TokenSt
 fn build_struct_field_flags(
     fields: Vec<&StructFieldDescriptor>,
     field_flags: &mut Vec<TokenStream2>,
+    is_zstd: bool,
 ) -> u8 {
     let mut total_bits = 0;
 
     // Find out the adequate bit size for the length of each field, if applicable.
-    for (name, ftype, is_compact, _) in fields {
+    for field in fields {
+        let StructFieldDescriptor { name, ftype, is_compact, use_alt_impl: _, is_reference: _ } =
+            field;
         // This happens when dealing with a wrapper struct eg. Struct(pub U256).
         let name = if name.is_empty() { "placeholder" } else { name };
 
@@ -106,30 +153,53 @@ fn build_struct_field_flags(
             }
         }
     }
+
+    if is_zstd {
+        field_flags.push(quote! {
+            pub __zstd: B1,
+        });
+
+        total_bits += 1;
+    }
+
     total_bits
 }
 
 /// Total number of bits should be divisible by 8, so we might need to pad the struct with an unused
 /// skipped field.
 ///
-/// Returns the total number of bytes used by the flags struct.
-fn pad_flag_struct(total_bits: u8, field_flags: &mut Vec<TokenStream2>) -> u8 {
+/// Returns the total number of bytes used by the flags struct and how many unused bits.
+fn pad_flag_struct(total_bits: u8, field_flags: &mut Vec<TokenStream2>) -> (u8, u8) {
     let remaining = 8 - total_bits % 8;
-    if remaining != 8 {
+    if remaining == 8 {
+        (total_bits / 8, 0)
+    } else {
         let bsize = format_ident!("B{remaining}");
         field_flags.push(quote! {
             #[skip]
             unused: #bsize ,
         });
-        (total_bits + remaining) / 8
-    } else {
-        total_bits / 8
+        ((total_bits + remaining) / 8, remaining)
     }
 }
 
 /// Placeholder struct for when there are no bitfields to be added.
-fn placeholder_flag_struct(flags: &Ident) -> TokenStream2 {
+fn placeholder_flag_struct(ident: &Ident, flags: &Ident) -> TokenStream2 {
+    let bitflag_encoded_bytes = format!("Used bytes by [`{flags}`]");
+    let bitflag_unused_bits = format!("Unused bits for new fields by [`{flags}`]");
     quote! {
+        impl #ident {
+            #[doc = #bitflag_encoded_bytes]
+            pub const fn bitflag_encoded_bytes() -> usize {
+                0
+            }
+
+            #[doc = #bitflag_unused_bits]
+            pub const fn bitflag_unused_bits() -> usize {
+                0
+            }
+        }
+
         /// Placeholder struct for when there is no need for a fieldset. Doesn't actually write or read any data.
         #[derive(Debug, Default)]
         pub struct #flags {

@@ -1,25 +1,36 @@
-use reth_rpc::{
-    eth::cache::{EthStateCache, EthStateCacheConfig},
-    EthApi, EthFilter, EthPubSub,
-};
-use serde::{Deserialize, Serialize};
+use reth_rpc::{EthFilter, EthPubSub};
+use reth_rpc_eth_api::EthApiTypes;
+use reth_rpc_eth_types::EthConfig;
+use reth_tasks::TaskSpawner;
 
-/// All handlers for the `eth` namespace
+/// Handlers for core, filter and pubsub `eth` namespace APIs.
 #[derive(Debug, Clone)]
-pub struct EthHandlers<Client, Pool, Network, Events> {
+pub struct EthHandlers<EthApi: EthApiTypes> {
     /// Main `eth_` request handler
-    pub api: EthApi<Client, Pool, Network>,
-    /// The async caching layer used by the eth handlers
-    pub eth_cache: EthStateCache,
+    pub api: EthApi,
     /// Polling based filter handler available on all transports
-    pub filter: EthFilter<Client, Pool>,
+    pub filter: EthFilter<EthApi>,
     /// Handler for subscriptions only available for transports that support it (ws, ipc)
-    pub pubsub: Option<EthPubSub<Client, Pool, Events>>,
+    pub pubsub: EthPubSub<EthApi>,
 }
 
-/// Additional config values for the eth namespace
-#[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
-pub struct EthConfig {
-    /// Settings for the caching layer
-    pub cache: EthStateCacheConfig,
+impl<EthApi> EthHandlers<EthApi>
+where
+    EthApi: EthApiTypes + 'static,
+{
+    /// Returns a new instance with the additional handlers for the `eth` namespace.
+    ///
+    /// This will spawn all necessary tasks for the additional handlers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bootstrap<Tasks>(config: EthConfig, executor: Tasks, eth_api: EthApi) -> Self
+    where
+        Tasks: TaskSpawner + Clone + 'static,
+    {
+        let filter =
+            EthFilter::new(eth_api.clone(), config.filter_config(), Box::new(executor.clone()));
+
+        let pubsub = EthPubSub::with_spawner(eth_api.clone(), Box::new(executor));
+
+        Self { api: eth_api, filter, pubsub }
+    }
 }

@@ -1,46 +1,8 @@
-use reth_codecs::{derive_arbitrary, Compact};
-use serde::{Deserialize, Serialize};
-
 /// Transaction Type
-#[derive_arbitrary(compact)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
-pub enum TxType {
-    /// Legacy transaction pre EIP-2929
-    #[default]
-    Legacy = 0_isize,
-    /// AccessList transaction
-    EIP2930 = 1_isize,
-    /// Transaction with Priority fee
-    EIP1559 = 2_isize,
-}
-
-impl From<TxType> for u8 {
-    fn from(value: TxType) -> Self {
-        match value {
-            TxType::Legacy => 0,
-            TxType::EIP2930 => 1,
-            TxType::EIP1559 => 2,
-        }
-    }
-}
-
-impl Compact for TxType {
-    fn to_compact(self, _: &mut impl bytes::BufMut) -> usize {
-        match self {
-            TxType::Legacy => 0,
-            TxType::EIP2930 => 1,
-            TxType::EIP1559 => 2,
-        }
-    }
-
-    fn from_compact(buf: &[u8], identifier: usize) -> (Self, &[u8]) {
-        (
-            match identifier {
-                0 => TxType::Legacy,
-                1 => TxType::EIP2930,
-                _ => TxType::EIP1559,
-            },
-            buf,
-        )
-    }
-}
+///
+/// Currently being used as 2-bit type when encoding it to `reth_codecs::Compact` on
+/// [`crate::TransactionSigned`]. Adding more transaction types will break the codec and
+/// database format.
+///
+/// Other required changes when adding a new type can be seen on [PR#3953](https://github.com/paradigmxyz/reth/pull/3953/files).
+pub use alloy_consensus::TxType;

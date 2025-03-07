@@ -1,20 +1,19 @@
 //! IPC request handling adapted from [`jsonrpsee`] http request handling
+
 use futures::{stream::FuturesOrdered, StreamExt};
 use jsonrpsee::{
+    batch_response_error,
     core::{
-        server::{
-            helpers::{prepare_error, BatchResponse, BatchResponseBuilder, MethodResponse},
-            resource_limiting::Resources,
-            rpc_module::{MethodKind, Methods},
-        },
-        tracing::{rx_log_from_json, tx_log_from_str},
+        server::helpers::prepare_error,
+        tracing::server::{rx_log_from_json, tx_log_from_str},
         JsonRawValue,
     },
-    server::{
-        logger,
-        logger::{Logger, TransportProtocol},
+    server::middleware::rpc::RpcServiceT,
+    types::{
+        error::{reject_too_big_request, ErrorCode},
+        ErrorObject, Id, InvalidRequest, Notification, Request,
     },
-    types::{error::ErrorCode, ErrorObject, Id, InvalidRequest, Notification, Params, Request},
+    BatchResponseBuilder, MethodResponse, ResponsePayload,
 };
 use std::sync::Arc;
 use tokio::sync::OwnedSemaphorePermit;
@@ -24,45 +23,34 @@ use tracing::instrument;
 type Notif<'a> = Notification<'a, Option<&'a JsonRawValue>>;
 
 #[derive(Debug, Clone)]
-pub(crate) struct Batch<'a, L: Logger> {
+pub(crate) struct Batch<S> {
     data: Vec<u8>,
-    call: CallData<'a, L>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CallData<'a, L: Logger> {
-    conn_id: usize,
-    logger: &'a L,
-    methods: &'a Methods,
-    max_response_body_size: u32,
-    max_log_length: u32,
-    resources: &'a Resources,
-    request_start: L::Instant,
+    rpc_service: S,
 }
 
 // Batch responses must be sent back as a single message so we read the results from each
 // request in the batch and read the results off of a new channel, `rx_batch`, and then send the
 // complete batch response back to the client over `tx`.
 #[instrument(name = "batch", skip(b), level = "TRACE")]
-pub(crate) async fn process_batch_request<L>(b: Batch<'_, L>) -> BatchResponse
+pub(crate) async fn process_batch_request<S>(
+    b: Batch<S>,
+    max_response_body_size: usize,
+) -> Option<String>
 where
-    L: Logger,
+    for<'a> S: RpcServiceT<'a> + Send,
 {
-    let Batch { data, call } = b;
+    let Batch { data, rpc_service } = b;
 
     if let Ok(batch) = serde_json::from_slice::<Vec<&JsonRawValue>>(&data) {
         let mut got_notif = false;
-        let mut batch_response =
-            BatchResponseBuilder::new_with_limit(call.max_response_body_size as usize);
+        let mut batch_response = BatchResponseBuilder::new_with_limit(max_response_body_size);
 
         let mut pending_calls: FuturesOrdered<_> = batch
             .into_iter()
             .filter_map(|v| {
                 if let Ok(req) = serde_json::from_str::<Request<'_>>(v.get()) {
-                    Some(Either::Right(execute_call(req, call.clone())))
-                } else if let Ok(_notif) =
-                    serde_json::from_str::<Notification<'_, &JsonRawValue>>(v.get())
-                {
+                    Some(Either::Right(rpc_service.call(req)))
+                } else if let Ok(_notif) = serde_json::from_str::<Notif<'_>>(v.get()) {
                     // notifications should not be answered.
                     got_notif = true;
                     None
@@ -82,175 +70,68 @@ where
 
         while let Some(response) = pending_calls.next().await {
             if let Err(too_large) = batch_response.append(&response) {
-                return too_large
+                return Some(too_large.to_result())
             }
         }
 
         if got_notif && batch_response.is_empty() {
-            BatchResponse { result: String::new(), success: true }
+            None
         } else {
-            batch_response.finish()
+            let batch_resp = batch_response.finish();
+            Some(MethodResponse::from_batch(batch_resp).to_result())
         }
     } else {
-        BatchResponse::error(Id::Null, ErrorObject::from(ErrorCode::ParseError))
+        Some(batch_response_error(Id::Null, ErrorObject::from(ErrorCode::ParseError)))
     }
 }
 
-pub(crate) async fn process_single_request<L: Logger>(
+pub(crate) async fn process_single_request<S>(
     data: Vec<u8>,
-    call: CallData<'_, L>,
-) -> MethodResponse {
+    rpc_service: &S,
+) -> Option<MethodResponse>
+where
+    for<'a> S: RpcServiceT<'a> + Send,
+{
     if let Ok(req) = serde_json::from_slice::<Request<'_>>(&data) {
-        execute_call_with_tracing(req, call).await
-    } else if let Ok(notif) = serde_json::from_slice::<Notif<'_>>(&data) {
-        execute_notification(notif, call.max_log_length)
+        Some(execute_call_with_tracing(req, rpc_service).await)
+    } else if serde_json::from_slice::<Notif<'_>>(&data).is_ok() {
+        None
     } else {
         let (id, code) = prepare_error(&data);
-        MethodResponse::error(id, ErrorObject::from(code))
+        Some(MethodResponse::error(id, ErrorObject::from(code)))
     }
 }
 
-#[instrument(name = "method_call", fields(method = req.method.as_ref()), skip(call, req), level = "TRACE")]
-pub(crate) async fn execute_call_with_tracing<'a, L: Logger>(
+#[instrument(name = "method_call", fields(method = req.method.as_ref()), skip(req, rpc_service), level = "TRACE")]
+pub(crate) async fn execute_call_with_tracing<'a, S>(
     req: Request<'a>,
-    call: CallData<'_, L>,
-) -> MethodResponse {
-    execute_call(req, call).await
-}
-
-pub(crate) async fn execute_call<L: Logger>(
-    req: Request<'_>,
-    call: CallData<'_, L>,
-) -> MethodResponse {
-    let CallData {
-        resources,
-        methods,
-        logger,
-        max_response_body_size,
-        max_log_length,
-        conn_id,
-        request_start,
-    } = call;
-
-    rx_log_from_json(&req, call.max_log_length);
-
-    let params = Params::new(req.params.map(|params| params.get()));
-    let name = &req.method;
-    let id = req.id;
-
-    let response = match methods.method_with_name(name) {
-        None => {
-            logger.on_call(
-                name,
-                params.clone(),
-                logger::MethodKind::Unknown,
-                TransportProtocol::Http,
-            );
-            MethodResponse::error(id, ErrorObject::from(ErrorCode::MethodNotFound))
-        }
-        Some((name, method)) => match &method.inner() {
-            MethodKind::Sync(callback) => {
-                logger.on_call(
-                    name,
-                    params.clone(),
-                    logger::MethodKind::MethodCall,
-                    TransportProtocol::Http,
-                );
-
-                match method.claim(name, resources) {
-                    Ok(guard) => {
-                        let r = (callback)(id, params, max_response_body_size as usize);
-                        drop(guard);
-                        r
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            "[Methods::execute_with_resources] failed to lock resources: {}",
-                            err
-                        );
-                        MethodResponse::error(id, ErrorObject::from(ErrorCode::ServerIsBusy))
-                    }
-                }
-            }
-            MethodKind::Async(callback) => {
-                logger.on_call(
-                    name,
-                    params.clone(),
-                    logger::MethodKind::MethodCall,
-                    TransportProtocol::Http,
-                );
-                match method.claim(name, resources) {
-                    Ok(guard) => {
-                        let id = id.into_owned();
-                        let params = params.into_owned();
-
-                        (callback)(
-                            id,
-                            params,
-                            conn_id,
-                            max_response_body_size as usize,
-                            Some(guard),
-                        )
-                        .await
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            "[Methods::execute_with_resources] failed to lock resources: {}",
-                            err
-                        );
-                        MethodResponse::error(id, ErrorObject::from(ErrorCode::ServerIsBusy))
-                    }
-                }
-            }
-            MethodKind::Subscription(_) | MethodKind::Unsubscription(_) => {
-                logger.on_call(
-                    name,
-                    params.clone(),
-                    logger::MethodKind::Unknown,
-                    TransportProtocol::Http,
-                );
-                tracing::error!("Subscriptions not supported on HTTP");
-                MethodResponse::error(id, ErrorObject::from(ErrorCode::InternalError))
-            }
-        },
-    };
-
-    tx_log_from_str(&response.result, max_log_length);
-    logger.on_result(name, response.success, request_start, TransportProtocol::Http);
-    response
+    rpc_service: &S,
+) -> MethodResponse
+where
+    for<'b> S: RpcServiceT<'b> + Send,
+{
+    rpc_service.call(req).await
 }
 
 #[instrument(name = "notification", fields(method = notif.method.as_ref()), skip(notif, max_log_length), level = "TRACE")]
-fn execute_notification(notif: Notif<'_>, max_log_length: u32) -> MethodResponse {
-    rx_log_from_json(&notif, max_log_length);
-    let response = MethodResponse { result: String::new(), success: true };
-    tx_log_from_str(&response.result, max_log_length);
+fn execute_notification(notif: &Notif<'_>, max_log_length: u32) -> MethodResponse {
+    rx_log_from_json(notif, max_log_length);
+    let response =
+        MethodResponse::response(Id::Null, ResponsePayload::success(String::new()), usize::MAX);
+    tx_log_from_str(response.as_result(), max_log_length);
     response
 }
 
-#[allow(unused)]
-pub(crate) struct HandleRequest<L: Logger> {
-    pub(crate) methods: Methods,
-    pub(crate) resources: Resources,
-    pub(crate) max_request_body_size: u32,
-    pub(crate) max_response_body_size: u32,
-    pub(crate) max_log_length: u32,
-    pub(crate) batch_requests_supported: bool,
-    pub(crate) logger: L,
-    pub(crate) conn: Arc<OwnedSemaphorePermit>,
-}
-
-pub(crate) async fn handle_request<L: Logger>(request: String, input: HandleRequest<L>) -> String {
-    let HandleRequest {
-        methods,
-        resources,
-        max_response_body_size,
-        max_log_length,
-        logger,
-        conn,
-        ..
-    } = input;
-
+pub(crate) async fn call_with_service<S>(
+    request: String,
+    rpc_service: S,
+    max_response_body_size: usize,
+    max_request_body_size: usize,
+    conn: Arc<OwnedSemaphorePermit>,
+) -> Option<String>
+where
+    for<'a> S: RpcServiceT<'a> + Send,
+{
     enum Kind {
         Single,
         Batch,
@@ -265,24 +146,27 @@ pub(crate) async fn handle_request<L: Logger>(request: String, input: HandleRequ
         })
         .unwrap_or(Kind::Single);
 
-    let request_start = logger.on_request(TransportProtocol::Http);
+    let data = request.into_bytes();
+    if data.len() > max_request_body_size {
+        return Some(batch_response_error(
+            Id::Null,
+            reject_too_big_request(max_request_body_size as u32),
+        ))
+    }
 
-    let call = CallData {
-        conn_id: 0,
-        logger: &logger,
-        methods: &methods,
-        max_response_body_size,
-        max_log_length,
-        resources: &resources,
-        request_start,
-    };
     // Single request or notification
     let res = if matches!(request_kind, Kind::Single) {
-        let response = process_single_request(request.into_bytes(), call).await;
-        response.result
+        let response = process_single_request(data, &rpc_service).await;
+        match response {
+            Some(response) if response.is_method_call() => Some(response.to_result()),
+            _ => {
+                // subscription responses are sent directly over the sink, return a response here
+                // would lead to duplicate responses for the subscription response
+                None
+            }
+        }
     } else {
-        let response = process_batch_request(Batch { data: request.into_bytes(), call }).await;
-        response.result
+        process_batch_request(Batch { data, rpc_service }, max_response_body_size).await
     };
 
     drop(conn);

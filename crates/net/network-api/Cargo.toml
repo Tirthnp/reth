@@ -1,26 +1,50 @@
 [package]
 name = "reth-network-api"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
-description = "Network interfaces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Network interfaces and commonly used types"
+
+[lints]
+workspace = true
 
 [dependencies]
 # reth
-reth-primitives = { path = "../../primitives" }
-reth-eth-wire = { path = "../eth-wire" }
+alloy-rpc-types-admin.workspace = true
+reth-network-peers.workspace = true
+reth-network-types.workspace = true
+reth-network-p2p.workspace = true
+reth-eth-wire-types.workspace = true
+reth-tokio-util.workspace = true
+reth-ethereum-forks.workspace = true
 
-# io
-serde = { version = "1.0", features = ["derive"], optional = true }
+# ethereum
+alloy-primitives = { workspace = true, features = ["getrandom"] }
+
+# eth
+enr = { workspace = true, default-features = false, features = ["rust-secp256k1"] }
+
+# async
+futures.workspace = true
+tokio-stream.workspace = true
 
 # misc
-async-trait = "0.1"
-thiserror = "1.0.37"
-tokio = { version = "1.21.2", features = ["sync"] }
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"], optional = true }
+tokio = { workspace = true, features = ["sync"] }
+auto_impl.workspace = true
+derive_more.workspace = true
 
 [features]
 default = ["serde"]
-serde = ["dep:serde"]
-test-utils = []
+serde = [
+    "dep:serde",
+    "reth-eth-wire-types/serde",
+    "reth-network-types/serde",
+    "alloy-primitives/serde",
+    "enr/serde",
+    "reth-ethereum-forks/serde",
+]

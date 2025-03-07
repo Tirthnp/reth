@@ -1,16 +1,64 @@
 [package]
 name = "reth-revm"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "reth specific revm utilities"
 
-[dependencies]
-# reth 
-reth-primitives = { path = "../primitives" }
-reth-interfaces = { path = "../interfaces" }
-reth-provider = { path = "../storage/provider" }
-reth-revm-primitives = { path = "./revm-primitives" }
+[lints]
+workspace = true
 
-revm = { version = "3.0.0"}
+[dependencies]
+# reth
+reth-primitives-traits.workspace = true
+reth-storage-errors.workspace = true
+reth-storage-api.workspace = true
+reth-trie = { workspace = true, optional = true }
+
+# alloy
+alloy-primitives.workspace = true
+
+# revm
+revm.workspace = true
+revm-database.workspace = true
+revm-inspector.workspace = true
+
+[dev-dependencies]
+reth-trie.workspace = true
+reth-ethereum-forks.workspace = true
+alloy-primitives.workspace = true
+alloy-consensus.workspace = true
+
+[features]
+default = ["std"]
+std = [
+    "reth-primitives-traits/std",
+    "alloy-primitives/std",
+    "revm/std",
+    "alloy-consensus/std",
+    "reth-ethereum-forks/std",
+    "revm-database/std",
+    "revm-inspector/std",
+    "reth-storage-api/std",
+    "reth-storage-errors/std",
+]
+witness = ["dep:reth-trie"]
+test-utils = [
+    "dep:reth-trie",
+    "reth-primitives-traits/test-utils",
+    "reth-trie?/test-utils",
+    "revm/test-utils",
+]
+serde = [
+    "revm/serde",
+    "alloy-primitives/serde",
+    "alloy-consensus/serde",
+    "reth-trie?/serde",
+    "reth-ethereum-forks/serde",
+    "revm-database/serde",
+    "reth-primitives-traits/serde",
+    "revm-inspector/serde",
+]

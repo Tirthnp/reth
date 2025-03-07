@@ -1,86 +1,56 @@
-use super::AccountProvider;
-use crate::BlockHashProvider;
-use auto_impl::auto_impl;
-use reth_interfaces::Result;
-use reth_primitives::{
-    Address, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, H256, KECCAK_EMPTY, U256,
+use alloy_primitives::BlockNumber;
+use reth_execution_types::ExecutionOutcome;
+use reth_storage_errors::provider::ProviderResult;
+use reth_trie::HashedPostStateSorted;
+use revm_database::{
+    states::{PlainStateReverts, StateChangeset},
+    OriginalValuesKnown,
 };
 
-/// An abstraction for a type that provides state data.
-#[auto_impl(&, Box)]
-pub trait StateProvider: BlockHashProvider + AccountProvider + Send + Sync {
-    /// Get storage.
-    fn storage(&self, account: Address, storage_key: StorageKey) -> Result<Option<StorageValue>>;
+use super::StorageLocation;
 
-    /// Get account code by its hash
-    fn bytecode_by_hash(&self, code_hash: H256) -> Result<Option<Bytes>>;
+/// A trait specifically for writing state changes or reverts
+pub trait StateWriter {
+    /// Receipt type included into [`ExecutionOutcome`].
+    type Receipt;
 
-    /// Get account code by its address.
+    /// Write the state and receipts to the database or static files if `static_file_producer` is
+    /// `Some`. It should be `None` if there is any kind of pruning/filtering over the receipts.
+    fn write_state(
+        &self,
+        execution_outcome: &ExecutionOutcome<Self::Receipt>,
+        is_value_known: OriginalValuesKnown,
+        write_receipts_to: StorageLocation,
+    ) -> ProviderResult<()>;
+
+    /// Write state reverts to the database.
     ///
-    /// Returns `None` if the account doesn't exist or account is not a contract
-    fn account_code(&self, addr: Address) -> Result<Option<Bytes>> {
-        // Get basic account information
-        // Returns None if acc doesn't exist
-        let acc = match self.basic_account(addr)? {
-            Some(acc) => acc,
-            None => return Ok(None),
-        };
+    /// NOTE: Reverts will delete all wiped storage from plain state.
+    fn write_state_reverts(
+        &self,
+        reverts: PlainStateReverts,
+        first_block: BlockNumber,
+    ) -> ProviderResult<()>;
 
-        if let Some(code_hash) = acc.bytecode_hash {
-            if code_hash == KECCAK_EMPTY {
-                return Ok(None)
-            }
-            // Get the code from the code hash
-            return self.bytecode_by_hash(code_hash)
-        }
+    /// Write state changes to the database.
+    fn write_state_changes(&self, changes: StateChangeset) -> ProviderResult<()>;
 
-        // Return `None` if no code hash is set
-        Ok(None)
-    }
+    /// Writes the hashed state changes to the database
+    fn write_hashed_state(&self, hashed_state: &HashedPostStateSorted) -> ProviderResult<()>;
 
-    /// Get account balance by its address.
-    ///
-    /// Returns `None` if the account doesn't exist
-    fn account_balance(&self, addr: Address) -> Result<Option<U256>> {
-        // Get basic account information
-        // Returns None if acc doesn't exist
-        match self.basic_account(addr)? {
-            Some(acc) => Ok(Some(acc.balance)),
-            None => Ok(None),
-        }
-    }
+    /// Remove the block range of state above the given block. The state of the passed block is not
+    /// removed.
+    fn remove_state_above(
+        &self,
+        block: BlockNumber,
+        remove_receipts_from: StorageLocation,
+    ) -> ProviderResult<()>;
 
-    /// Get account nonce by its address.
-    ///
-    /// Returns `None` if the account doesn't exist
-    fn account_nonce(&self, addr: Address) -> Result<Option<u64>> {
-        // Get basic account information
-        // Returns None if acc doesn't exist
-        match self.basic_account(addr)? {
-            Some(acc) => Ok(Some(acc.nonce)),
-            None => Ok(None),
-        }
-    }
-}
-
-/// Light wrapper that returns `StateProvider` implementations that correspond to the given
-/// `BlockNumber` or the latest state.
-pub trait StateProviderFactory: Send + Sync {
-    /// History State provider.
-    type HistorySP<'a>: StateProvider
-    where
-        Self: 'a;
-    /// Latest state provider.
-    type LatestSP<'a>: StateProvider
-    where
-        Self: 'a;
-
-    /// Storage provider for latest block.
-    fn latest(&self) -> Result<Self::LatestSP<'_>>;
-
-    /// Returns a [StateProvider] indexed by the given block number.
-    fn history_by_block_number(&self, block: BlockNumber) -> Result<Self::HistorySP<'_>>;
-
-    /// Returns a [StateProvider] indexed by the given block hash.
-    fn history_by_block_hash(&self, block: BlockHash) -> Result<Self::HistorySP<'_>>;
+    /// Take the block range of state, recreating the [`ExecutionOutcome`]. The state of the passed
+    /// block is not removed.
+    fn take_state_above(
+        &self,
+        block: BlockNumber,
+        remove_receipts_from: StorageLocation,
+    ) -> ProviderResult<ExecutionOutcome<Self::Receipt>>;
 }

@@ -1,16 +1,15 @@
-use jsonrpsee::{core::RpcResult as Result, proc_macros::rpc};
-use reth_primitives::{Bytes, H256};
+use alloy_primitives::{Bytes, B256};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 
 /// Web3 rpc interface.
-#[cfg_attr(not(feature = "client"), rpc(server))]
-#[cfg_attr(feature = "client", rpc(server, client))]
-#[async_trait::async_trait]
+#[cfg_attr(not(feature = "client"), rpc(server, namespace = "web3"))]
+#[cfg_attr(feature = "client", rpc(server, client, namespace = "web3"))]
 pub trait Web3Api {
     /// Returns current client version.
-    #[method(name = "web3_clientVersion")]
-    async fn client_version(&self) -> Result<String>;
+    #[method(name = "clientVersion")]
+    async fn client_version(&self) -> RpcResult<String>;
 
     /// Returns sha3 of the given data.
-    #[method(name = "web3_sha3")]
-    fn sha3(&self, input: Bytes) -> Result<H256>;
+    #[method(name = "sha3")]
+    fn sha3(&self, input: Bytes) -> RpcResult<B256>;
 }

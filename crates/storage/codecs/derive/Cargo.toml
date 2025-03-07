@@ -1,35 +1,25 @@
 [package]
-name = "codecs-derive"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
+name = "reth-codecs-derive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 readme = "../README.md"
 
-[package.metadata.cargo-udeps.ignore]
-normal = [
-  # Used in proc macros
-  "serde",
-  # Used in proc macros
-  "parity-scale-codec"
-]
+[lints]
+workspace = true
 
 [lib]
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0.47"
-quote = "1.0"
-syn = { version = "1.0", features = ["full"] }
-convert_case = "0.6.0"
+convert_case.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
 
-# codecs
-serde = { version = "1.0.*", default-features = false }
-parity-scale-codec = { version = "3.2.1", features = ["derive", "bytes"] }
-
-[features]
-default = ["compact"]
-compact = []
-scale = []
-postcard = []
-no_codec = []
+[dev-dependencies]
+similar-asserts.workspace = true
+syn = { workspace = true, features = ["full", "extra-traits"] }

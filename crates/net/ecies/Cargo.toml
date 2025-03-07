@@ -1,42 +1,44 @@
 [package]
 name = "reth-ecies"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
-reth-rlp = { path = "../../rlp", features = ["derive", "ethereum-types", "std"] }
-reth-primitives = { path = "../../primitives" }
-reth-net-common = { path = "../common" }
+reth-network-peers = { workspace = true, features = ["secp256k1"] }
 
-futures = "0.3.24"
-thiserror = "1.0.37"
-tokio = { version = "1.21.2", features = ["full"] }
-tokio-stream = "0.1.11"
-tokio-util = { version = "0.7.4", features = ["codec"] }
-pin-project = "1.0"
+alloy-primitives = { workspace = true, features = ["rand", "rlp"] }
+alloy-rlp = { workspace = true, features = ["derive", "arrayvec"] }
 
-educe = "0.4.19"
-tracing = "0.1.37"
+futures.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+pin-project.workspace = true
+
+tracing = { workspace = true, features = ["attributes"] }
 
 # HeaderBytes
-generic-array = "0.14.6"
-typenum = "1.15.0"
-byteorder = "1.4.3"
+generic-array.workspace = true
+typenum.workspace = true
+byteorder.workspace = true
 
 # crypto
-rand = "0.8.5"
-ctr = "0.9.2"
-digest = "0.10.5"
-secp256k1 = { version = "0.24.2", features = ["global-context", "rand-std", "recovery"] }
-sha2 = "0.10.6"
-sha3 = "0.10.5"
-aes = "0.8.1"
-hmac = "0.12.1"
-block-padding = "0.3.2"
-cipher = { version = "0.4.3", features = ["block-padding"] }
-
-[dev-dependencies]
-hex-literal = "0.3.4"
+rand.workspace = true
+ctr.workspace = true
+digest.workspace = true
+secp256k1 = { workspace = true, features = ["global-context", "std", "recovery", "rand"] }
+concat-kdf.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+aes.workspace = true
+hmac.workspace = true
+block-padding.workspace = true
+cipher = { workspace = true, features = ["block-padding"] }

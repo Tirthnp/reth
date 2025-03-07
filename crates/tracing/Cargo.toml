@@ -1,14 +1,22 @@
 [package]
 name = "reth-tracing"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "tracing helpers"
 
+[lints]
+workspace = true
+
 [dependencies]
-tracing = { version = "0.1", default-features = false }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
-tracing-appender = "0.2"
-tracing-journald = "0.3"
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "ansi", "json"] }
+tracing-appender.workspace = true
+tracing-journald.workspace = true
+tracing-logfmt.workspace = true
+rolling-file.workspace = true
+eyre.workspace = true
+clap = { workspace = true, features = ["derive"] }

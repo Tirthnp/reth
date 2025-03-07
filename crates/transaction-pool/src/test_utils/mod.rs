@@ -1,52 +1,92 @@
 //! Internal helpers for testing.
-#![allow(missing_docs, unused, missing_debug_implementations, unreachable_pub)]
+
+use crate::{blobstore::InMemoryBlobStore, noop::MockTransactionValidator, Pool, PoolConfig};
+use std::ops::Deref;
+
+mod gen;
+pub use gen::*;
 
 mod mock;
+pub use mock::*;
+
 mod pool;
 
-use crate::{
-    Pool, PoolTransaction, TransactionOrigin, TransactionValidationOutcome, TransactionValidator,
-};
-use async_trait::async_trait;
-pub use mock::*;
-use std::{marker::PhantomData, sync::Arc};
-
 /// A [Pool] used for testing
-pub type TestPool = Pool<NoopTransactionValidator<MockTransaction>, MockOrdering>;
+pub type TestPool =
+    Pool<MockTransactionValidator<MockTransaction>, MockOrdering, InMemoryBlobStore>;
 
-/// Returns a new [Pool] used for testing purposes
-pub fn testing_pool() -> TestPool {
-    Pool::new(
-        Arc::new(NoopTransactionValidator::default()),
-        Arc::new(MockOrdering::default()),
-        Default::default(),
-    )
-}
-
-// A [`TransactionValidator`] that does nothing.
+/// Structure encapsulating a [`TestPool`] used for testing
 #[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct NoopTransactionValidator<T>(PhantomData<T>);
+pub struct TestPoolBuilder(TestPool);
 
-#[async_trait::async_trait]
-impl<T: PoolTransaction> TransactionValidator for NoopTransactionValidator<T> {
-    type Transaction = T;
-
-    async fn validate_transaction(
-        &self,
-        origin: TransactionOrigin,
-        transaction: Self::Transaction,
-    ) -> TransactionValidationOutcome<Self::Transaction> {
-        TransactionValidationOutcome::Valid {
-            balance: Default::default(),
-            state_nonce: 0,
-            transaction,
-        }
+impl Default for TestPoolBuilder {
+    fn default() -> Self {
+        Self(Pool::new(
+            MockTransactionValidator::default(),
+            MockOrdering::default(),
+            InMemoryBlobStore::default(),
+            Default::default(),
+        ))
     }
 }
 
-impl<T> Default for NoopTransactionValidator<T> {
-    fn default() -> Self {
-        NoopTransactionValidator(PhantomData::default())
+impl TestPoolBuilder {
+    /// Returns a new [`TestPoolBuilder`] with a custom validator used for testing purposes
+    pub fn with_validator(self, validator: MockTransactionValidator<MockTransaction>) -> Self {
+        Self(Pool::new(
+            validator,
+            MockOrdering::default(),
+            self.pool.blob_store().clone(),
+            self.pool.config().clone(),
+        ))
     }
+
+    /// Returns a new [`TestPoolBuilder`] with a custom ordering used for testing purposes
+    pub fn with_ordering(self, ordering: MockOrdering) -> Self {
+        Self(Pool::new(
+            self.pool.validator().clone(),
+            ordering,
+            self.pool.blob_store().clone(),
+            self.pool.config().clone(),
+        ))
+    }
+
+    /// Returns a new [`TestPoolBuilder`] with a custom blob store used for testing purposes
+    pub fn with_blob_store(self, blob_store: InMemoryBlobStore) -> Self {
+        Self(Pool::new(
+            self.pool.validator().clone(),
+            MockOrdering::default(),
+            blob_store,
+            self.pool.config().clone(),
+        ))
+    }
+
+    /// Returns a new [`TestPoolBuilder`] with a custom configuration used for testing purposes
+    pub fn with_config(self, config: PoolConfig) -> Self {
+        Self(Pool::new(
+            self.pool.validator().clone(),
+            MockOrdering::default(),
+            self.pool.blob_store().clone(),
+            config,
+        ))
+    }
+}
+
+impl From<TestPoolBuilder> for TestPool {
+    fn from(wrapper: TestPoolBuilder) -> Self {
+        wrapper.0
+    }
+}
+
+impl Deref for TestPoolBuilder {
+    type Target = TestPool;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Returns a new [Pool] with default field values used for testing purposes
+pub fn testing_pool() -> TestPool {
+    TestPoolBuilder::default().into()
 }

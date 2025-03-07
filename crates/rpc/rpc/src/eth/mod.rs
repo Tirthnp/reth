@@ -1,12 +1,23 @@
-//! `eth` namespace handler implementation.
+//! Sever implementation of `eth` namespace API.
 
-mod api;
-pub mod cache;
-pub(crate) mod error;
-mod filter;
-mod pubsub;
-mod signer;
+pub mod builder;
+pub mod bundle;
+pub mod core;
+pub mod filter;
+pub mod helpers;
+pub mod pubsub;
+pub mod sim_bundle;
 
-pub use api::{EthApi, EthApiSpec};
+/// Implementation of `eth` namespace API.
+pub use builder::EthApiBuilder;
+pub use bundle::EthBundle;
+pub use core::EthApi;
 pub use filter::EthFilter;
 pub use pubsub::EthPubSub;
+
+pub use helpers::{
+    signer::DevSigner,
+    types::{EthTxBuilder, EthereumEthApiTypes},
+};
+
+pub use reth_rpc_eth_api::{EthApiServer, EthApiTypes, FullEthApiServer, RpcNodeCore};

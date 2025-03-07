@@ -1,34 +1,40 @@
 [package]
 name = "reth-libmdbx"
-version = "0.1.6"
-edition = "2021"
+description = "Idiomatic and safe MDBX wrapper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
-description = "Idiomatic and safe MDBX wrapper with good licence"
-repository = "https://github.com/paradigmxyz/reth"
-readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
 
-[lib]
-name = "reth_libmdbx"
+[lints]
+workspace = true
 
 [dependencies]
-bitflags = "1"
-byteorder = "1"
-derive_more = "0.99"
-indexmap = "1"
-libc = "0.2"
-parking_lot = "0.12"
-thiserror = "1"
+reth-mdbx-sys.workspace = true
 
-ffi = { package = "reth-mdbx-sys", path = "./mdbx-sys" }
+bitflags.workspace = true
+byteorder.workspace = true
+derive_more.workspace = true
+indexmap.workspace = true
+parking_lot.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 
-lifetimed-bytes = { version = "0.1", optional = true }
+dashmap = { workspace = true, features = ["inline"], optional = true }
+
+[features]
+default = []
+return-borrowed = []
+read-tx-timeouts = ["dep:dashmap"]
 
 [dev-dependencies]
-pprof = { version = "0.11", features = ["flamegraph", "frame-pointer", "criterion"] }
-criterion = "0.4"
-rand = "0.8"
-rand_xorshift = "0.3"
-tempfile = "3"
+pprof = { workspace = true, features = ["flamegraph", "frame-pointer", "criterion"] }
+criterion.workspace = true
+rand.workspace = true
+tempfile.workspace = true
 
 [[bench]]
 name = "cursor"
